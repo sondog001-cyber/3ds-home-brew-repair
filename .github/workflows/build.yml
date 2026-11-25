@@ -4,8 +4,8 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: ubuntu-latest
-    container: devkitpro/devkitarm:latest
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5
     steps:
       - uses: actions/checkout@v4
       - name: Compile
@@ -13,11 +13,15 @@ jobs:
         run: |
           set -eux
           export PATH="$DEVKITARM/bin:$DEVKITPRO/tools/bin:$PATH"
+          arm-none-eabi-gcc --version
+          (dkp-pacman -Q || pacman -Q) > toolchain-versions.txt
           arm-none-eabi-gcc -D__3DS__ -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -mword-relocations -ffunction-sections -fdata-sections -O2 -Wall -I"$DEVKITPRO/libctru/include" source/main.c -specs=3dsx.specs -L"$DEVKITPRO/libctru/lib" -lctru -lm -o LCDLab.elf
           3dsxtool LCDLab.elf LCDLab.3dsx
           test -s LCDLab.3dsx
       - uses: actions/upload-artifact@v4
         with:
           name: LCDLab-3dsx
-          path: LCDLab.3dsx
+          path: |
+            LCDLab.3dsx
+            toolchain-versions.txt
           if-no-files-found: error
