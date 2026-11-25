@@ -4,23 +4,30 @@
 #include <string.h>
 #include <stdint.h>
 static int calstate=0; static u8 cal[2]; static Result calresult=0;
-static int job=0, attempted[3]={0}, done[3]={0};
-static Result results[3]; static const char *services[]={"mcu::RTC","mcu::GPU","mcu::HWC"};
+static int job=0, attempted=0, done=0; static u8 live[2][2]; static int reads=0;
+static Result result;
 static Thread worker=NULL; static u64 started=0; static int timedout=0;
-static void logstep(const char *s){mkdir("sdmc:/3ds",0777);mkdir("sdmc:/3ds/LCDLab",0777);FILE *f=fopen("sdmc:/3ds/LCDLab/progress-v051.txt","a");if(f){fprintf(f,"%s\n",s);fclose(f);}}
+static void logstep(const char *s){mkdir("sdmc:/3ds",0777);mkdir("sdmc:/3ds/LCDLab",0777);FILE *f=fopen("sdmc:/3ds/LCDLab/progress-v052.txt","a");if(f){fprintf(f,"%s\n",s);fclose(f);}}
 static void logresult(const char *stage,Result r){
  char b[160];snprintf(b,sizeof(b),"%s result=%08lX level=%lu summary=%lu module=%lu desc=%lu",stage,(unsigned long)r,(unsigned long)R_LEVEL(r),(unsigned long)R_SUMMARY(r),(unsigned long)R_MODULE(r),(unsigned long)R_DESCRIPTION(r));logstep(b);
 }
 static void probe(void *arg){
- int i=(int)(intptr_t)arg;Handle h=0;
- logstep(services[i]);
- bool registered=false;
- Result r=srvIsServiceRegistered(&registered,services[i]);
- logresult("registration check",r);
- if(R_SUCCEEDED(r)&&registered){srvSetBlockingPolicy(true);r=srvGetServiceHandle(&h,services[i]);srvSetBlockingPolicy(false);}else if(R_SUCCEEDED(r)){logstep("Service not registered; skipped");r=(Result)-1;}
- logresult("service acquisition",r);
- if(R_SUCCEEDED(r)){Result close=svcCloseHandle(h);logresult("close handle",close);}
- results[i]=r;done[i]=1;
+ (void)arg;bool registered=false;
+ Result r=srvIsServiceRegistered(&registered,"mcu::HWC");logresult("HWC registration",r);
+ if(R_SUCCEEDED(r)&&registered){
+ srvSetBlockingPolicy(true);r=mcuHwcInit();srvSetBlockingPolicy(false);
+ logresult("HWC init",r);
+ if(R_SUCCEEDED(r)){
+ for(int i=0;i<2&&R_SUCCEEDED(r);i++){
+ for(int j=0;j<2&&R_SUCCEEDED(r);j++){
+ char stage[80];snprintf(stage,sizeof(stage),"Pass %d register %02X",i+1,j+3);logstep(stage);
+ r=MCUHWC_ReadRegister((u8)(j+3),&live[i][j],1);logresult(stage,r);
+ if(R_SUCCEEDED(r)){reads++;snprintf(stage,sizeof(stage),"Value %u",live[i][j]);logstep(stage);}
+ }}
+ mcuHwcExit();logstep("HWC released");
+ }
+ }else if(R_SUCCEEDED(r))r=(Result)-1;
+ result=r;done=1;
 }
 static void readcal(void *arg){
  (void)arg;
@@ -44,25 +51,24 @@ int main(void){
  if(worker){if(R_SUCCEEDED(threadJoin(worker,0))){threadFree(worker);worker=NULL;logstep("Worker completed");if(job==0&&calstate==1){char b[80];snprintf(b,sizeof(b),"Stored bytes %u,%u",cal[0],cal[1]);logstep(b);}dirty=1;}else if(!timedout&&osGetTime()-started>=5000){timedout=1;logstep("CFG worker timeout; no retry");dirty=1;}}
  if(k&KEY_START){if(!worker)break;dirty=1;}
  if(!worker&&!timedout&&!compare&&!(k&KEY_START)){
- int i=(k&KEY_SELECT)?0:(k&KEY_B)?1:(k&KEY_R)&&(hidKeysHeld()&KEY_Y)?2:-1;
- if(i>=0&&!attempted[i]){attempted[i]=1;job=i+1;started=osGetTime();worker=threadCreate(probe,(void*)(intptr_t)i,16384,0x30,-2,false);if(!worker){results[i]=(Result)-1;done[i]=1;logstep("Worker creation failed");}dirty=1;}
+ if((k&KEY_SELECT)&&!attempted){attempted=1;job=1;started=osGetTime();worker=threadCreate(probe,NULL,16384,0x30,-2,false);if(!worker){result=(Result)-1;done=1;logstep("Worker creation failed");}dirty=1;}
  }
  if(k&KEY_RIGHT){p=(p+1)%14;dirty=1;}
  if(k&KEY_LEFT){p=(p+13)%14;dirty=1;}
  if(k&KEY_UP){wi=(wi+1)%5;dirty=1;}
  if(k&KEY_DOWN){wi=(wi+4)%5;dirty=1;}
  if(k&KEY_L){gray=gray>=8?gray-8:0;dirty=1;}
- if((k&KEY_R)&&!(hidKeysHeld()&KEY_Y)){gray=gray<=247?gray+8:255;dirty=1;}
+ if(k&KEY_R){gray=gray<=247?gray+8:255;dirty=1;}
  if(k&KEY_X){compare=!compare;dirty=1;}
- if((k&KEY_Y)&&!compare&&!worker&&!timedout&&!calstate&&!(hidKeysHeld()&KEY_R)){
+ if((k&KEY_Y)&&!compare&&!worker&&!timedout&&!calstate){
  consoleClear();printf("Reading stored CFG calibration...\n");gfxFlushBuffers();gfxSwapBuffers();gspWaitForVBlank();
  job=0;logstep("Starting read-only CFG worker");started=osGetTime();worker=threadCreate(readcal,NULL,8192,0x30,-2,false);if(!worker){calstate=-1;calresult=-1;}dirty=1;
  }
  if(k&KEY_A){
  mkdir("sdmc:/3ds",0777);mkdir("sdmc:/3ds/LCDLab",0777);
- FILE *f=fopen("sdmc:/3ds/LCDLab/report-v051.txt","a");
- if(f){fprintf(f,"v0.5.1 pattern=%s width=%d gray=%d compare=%d MCU=probe\n",names[p],widths[wi],gray,compare);if(!worker)fprintf(f,"CFG state=%d result=%08lX raw=%u,%u\n",calstate,(unsigned long)calresult,cal[0],cal[1]);else fprintf(f,"CFG pending or stalled\n");saved=fclose(f)==0?1:-1;}else saved=-1;dirty=1;}
- if(!compare&&dirty){consoleClear();printf("LCD Lab v0.5.1 - SERVICE DIAG\n\n%d/14 %s\nStripe width: %d px\nGray: %d/255\n\nLeft/Right: pattern\nUp/Down: stripe width\nL/R: gray intensity\nX: compare both screens\nA: append report\nSTART: exit\n\nY: read saved calibration\nSELECT RTC / B GPU / Y+R HWC\nService probes only. No writes.\nReport: %s\n",p+1,names[p],widths[wi],gray,saved==1?"saved":saved==-1?"failed":"not saved");if(worker)printf(timedout?"Request stalled; power off if needed.\n":"Request pending; please wait.\n");else if(calstate==1)printf("Stored raw bytes: %u, %u\n",cal[0],cal[1]);else if(calstate<0)printf("CFG error: %08lX\n",(unsigned long)calresult);if(!worker){for(int i=0;i<3;i++){if(done[i])printf("%s %08lX\n",services[i],(unsigned long)results[i]);else printf("%s not tested\n",services[i]);}}dirty=0;}
+ FILE *f=fopen("sdmc:/3ds/LCDLab/report-v052.txt","a");
+ if(f){fprintf(f,"v0.5.2 pattern=%s width=%d gray=%d compare=%d MCU=probe\n",names[p],widths[wi],gray,compare);if(!worker)fprintf(f,"CFG state=%d result=%08lX raw=%u,%u\n",calstate,(unsigned long)calresult,cal[0],cal[1]);else fprintf(f,"CFG pending or stalled\n");if(!worker&&done)fprintf(f,"HWC=%08lX reads=%d live=%u,%u / %u,%u\n",(unsigned long)result,reads,live[0][0],live[0][1],live[1][0],live[1][1]);saved=fclose(f)==0?1:-1;}else saved=-1;dirty=1;}
+ if(!compare&&dirty){consoleClear();printf("LCD Lab v0.5.2 - LIVE READ ONLY\n\n%d/14 %s\nStripe width: %d px\nGray: %d/255\n\nLeft/Right: pattern\nUp/Down: stripe width\nL/R: gray intensity\nX: compare both screens\nA: append report\nSTART: exit\n\nY: read saved calibration\nSELECT: read live HWC twice\nNo hardware writes.\nReport: %s\n",p+1,names[p],widths[wi],gray,saved==1?"saved":saved==-1?"failed":"not saved");if(worker)printf(timedout?"Request stalled; power off if needed.\n":"Request pending; please wait.\n");else if(calstate==1)printf("Stored raw bytes: %u, %u\n",cal[0],cal[1]);else if(calstate<0)printf("CFG error: %08lX\n",(unsigned long)calresult);if(!worker){if(done){printf("HWC result: %08lX\n",(unsigned long)result);if(reads==4)printf("Live 1: %u, %u\nLive 2: %u, %u\n%s\n",live[0][0],live[0][1],live[1][0],live[1][1],memcmp(live[0],live[1],2)==0?"Repeat matched":"Repeat DIFFERENT");else printf("Completed reads: %d/4\n",reads);}else printf("HWC not tested\n");}dirty=0;}
  if(p!=lastp||wi!=lastwi||gray!=lastgray||compare!=lastcompare||(p==13&&lastcycle!=frame/120)){draw(GFX_TOP,p,widths[wi],gray,frame);if(compare)draw(GFX_BOTTOM,p,widths[wi],gray,frame);lastp=p;lastwi=wi;lastgray=gray;lastcompare=compare;lastcycle=frame/120;}
  frame++;gfxFlushBuffers();
  }
