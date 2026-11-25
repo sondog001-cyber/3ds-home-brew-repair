@@ -14,7 +14,10 @@ static void logresult(const char *stage,Result r){
 static void probe(void *arg){
  int i=(int)(intptr_t)arg;Handle h=0;
  logstep(services[i]);
- Result r=srvGetServiceHandle(&h,services[i]);
+ bool registered=false;
+ Result r=srvIsServiceRegistered(&registered,services[i]);
+ logresult("registration check",r);
+ if(R_SUCCEEDED(r)&&registered){srvSetBlockingPolicy(true);r=srvGetServiceHandle(&h,services[i]);srvSetBlockingPolicy(false);}else if(R_SUCCEEDED(r)){logstep("Service not registered; skipped");r=(Result)-1;}
  logresult("service acquisition",r);
  if(R_SUCCEEDED(r)){Result close=svcCloseHandle(h);logresult("close handle",close);}
  results[i]=r;done[i]=1;
@@ -34,8 +37,8 @@ static void draw(gfxScreen_t s,int p,int stripe,int gray,unsigned frame){
  size_t i=(x*h+h-1-y)*3;fb[i]=b;fb[i+1]=g;fb[i+2]=r;
  }}
 int main(void){
- gfxInitDefault();gfxSet3D(false);gfxSetDoubleBuffering(GFX_BOTTOM,false);consoleInit(GFX_BOTTOM,NULL);
- int p=0,wi=0,gray=128,compare=0,dirty=1,saved=0;unsigned frame=0;
+ gfxInitDefault();gfxSet3D(false);gfxSetDoubleBuffering(GFX_TOP,false);gfxSetDoubleBuffering(GFX_BOTTOM,false);consoleInit(GFX_BOTTOM,NULL);
+ int p=0,wi=0,gray=128,compare=0,dirty=1,saved=0;unsigned frame=0;int lastp=-1,lastwi=-1,lastgray=-1,lastcompare=-1;unsigned lastcycle=999;
  while(aptMainLoop()){
  gspWaitForVBlank();hidScanInput();u32 k=hidKeysDown();
  if(worker){if(R_SUCCEEDED(threadJoin(worker,0))){threadFree(worker);worker=NULL;logstep("Worker completed");if(job==0&&calstate==1){char b[80];snprintf(b,sizeof(b),"Stored bytes %u,%u",cal[0],cal[1]);logstep(b);}dirty=1;}else if(!timedout&&osGetTime()-started>=5000){timedout=1;logstep("CFG worker timeout; no retry");dirty=1;}}
@@ -60,9 +63,8 @@ int main(void){
  FILE *f=fopen("sdmc:/3ds/LCDLab/report-v051.txt","a");
  if(f){fprintf(f,"v0.5.1 pattern=%s width=%d gray=%d compare=%d MCU=probe\n",names[p],widths[wi],gray,compare);if(!worker)fprintf(f,"CFG state=%d result=%08lX raw=%u,%u\n",calstate,(unsigned long)calresult,cal[0],cal[1]);else fprintf(f,"CFG pending or stalled\n");saved=fclose(f)==0?1:-1;}else saved=-1;dirty=1;}
  if(!compare&&dirty){consoleClear();printf("LCD Lab v0.5.1 - SERVICE DIAG\n\n%d/14 %s\nStripe width: %d px\nGray: %d/255\n\nLeft/Right: pattern\nUp/Down: stripe width\nL/R: gray intensity\nX: compare both screens\nA: append report\nSTART: exit\n\nY: read saved calibration\nSELECT RTC / B GPU / Y+R HWC\nService probes only. No writes.\nReport: %s\n",p+1,names[p],widths[wi],gray,saved==1?"saved":saved==-1?"failed":"not saved");if(worker)printf(timedout?"Request stalled; power off if needed.\n":"Request pending; please wait.\n");else if(calstate==1)printf("Stored raw bytes: %u, %u\n",cal[0],cal[1]);else if(calstate<0)printf("CFG error: %08lX\n",(unsigned long)calresult);if(!worker){for(int i=0;i<3;i++){if(done[i])printf("%s %08lX\n",services[i],(unsigned long)results[i]);else printf("%s not tested\n",services[i]);}}dirty=0;}
- draw(GFX_TOP,p,widths[wi],gray,frame);
- if(compare)draw(GFX_BOTTOM,p,widths[wi],gray,frame);
- frame++;gfxFlushBuffers();gfxSwapBuffers();
+ if(p!=lastp||wi!=lastwi||gray!=lastgray||compare!=lastcompare||(p==13&&lastcycle!=frame/120)){draw(GFX_TOP,p,widths[wi],gray,frame);if(compare)draw(GFX_BOTTOM,p,widths[wi],gray,frame);lastp=p;lastwi=wi;lastgray=gray;lastcompare=compare;lastcycle=frame/120;}
+ frame++;gfxFlushBuffers();
  }
  if(worker)svcExitProcess();
  gfxExit();return 0;
