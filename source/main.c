@@ -29,6 +29,15 @@ static void probe(void *arg){
  }else if(R_SUCCEEDED(r))r=(Result)-1;
  result=r;done=1;if(R_SUCCEEDED(r)&&reads==4&&live[0][0]==93&&live[1][0]==93&&live[0][1]==110&&live[1][1]==110)current=93;
 }
+/* Compatibility wrapper matching upstream libctru MCUHWC_SetTopLcdFlicker. */
+static Result setTopFlicker(u8 flicker){
+ if(flicker<91||flicker>95)return (Result)-1;
+ u32 *cmdbuf=getThreadCommandBuffer();
+ cmdbuf[0]=IPC_MakeHeader(0x000C,1,0);
+ cmdbuf[1]=(u32)flicker;
+ Result r=svcSendSyncRequest(*mcuHwcGetSessionHandle());
+ return R_FAILED(r)?r:(Result)cmdbuf[1];
+}
 static void adjust(void *arg){
  (void)arg;u8 top=0,bottom=0;bool registered=false;
  int want=requested;Result r=srvIsServiceRegistered(&registered,"mcu::HWC");logresult("Adjust registration",r);
@@ -40,7 +49,7 @@ static void adjust(void *arg){
  if(R_SUCCEEDED(r)&&(top<91||top>95||bottom!=110||want<91||want>95||(want!=93&&top!=current)))r=(Result)-1;
  if(R_SUCCEEDED(r)){
  char b[80];snprintf(b,sizeof(b),"Set top %u -> %d",top,want);logstep(b);
- r=MCUHWC_SetTopLcdFlicker((u8)want);logresult("Set top",r);
+ r=setTopFlicker((u8)want);logresult("Set top",r);
  }
  if(R_SUCCEEDED(r)){r=MCUHWC_ReadRegister(3,&top,1);logresult("Verify top",r);}
  if(R_SUCCEEDED(r)){r=MCUHWC_ReadRegister(4,&bottom,1);logresult("Verify bottom",r);}
