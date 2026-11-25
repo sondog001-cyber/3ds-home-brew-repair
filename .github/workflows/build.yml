@@ -1,0 +1,23 @@
+name: Build LCD Lab
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile
+        shell: bash
+        run: |
+          set -eux
+          export PATH="$DEVKITARM/bin:$DEVKITPRO/tools/bin:$PATH"
+          arm-none-eabi-gcc -D__3DS__ -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -mword-relocations -ffunction-sections -fdata-sections -O2 -Wall -I"$DEVKITPRO/libctru/include" source/main.c -specs=3dsx.specs -L"$DEVKITPRO/libctru/lib" -lctru -lm -o LCDLab.elf
+          3dsxtool LCDLab.elf LCDLab.3dsx
+          test -s LCDLab.3dsx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LCDLab-3dsx
+          path: LCDLab.3dsx
+          if-no-files-found: error
